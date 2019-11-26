@@ -8,6 +8,7 @@ variables:
 stages:       
     - SITTest
     - LIVETest    
+    - Package  
 
 SIT:
     stage: SITTest
@@ -24,3 +25,14 @@ LIVE:
         - "cd $TEST_PROJECT_LIVE"
         - "dotnet build -c Release"        
         - "dotnet test -c Release"  
+
+PACKAGE:
+    stage: Package
+    only:
+        - master
+    script:
+        - echo "GENERATING NUGET PACKAGE"
+        - "dotnet pack -c Release -o ${PUBLISH_DIR} /p:PackageVersion=${VERSION}"
+        - echo "PUBLISHING NUGET PACKAGE"
+        - dotnet nuget push ${PUBLISH_DIR}/Test.Framework.*.nupkg --source ${REPOSITORY_URL} --api-key ${REPOSITOEY_AUTHENTICATION_KEY}
+
