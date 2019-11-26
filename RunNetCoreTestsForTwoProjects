@@ -1,0 +1,26 @@
+image: microsoft/dotnet:latest
+
+variables:
+     PUBLISH_DIR:  $CI_PROJECT_DIR
+     TEST_PROJECT_LIVE: $CI_PROJECT_DIR/Mock.API.Tests.LIVE/
+     TEST_PROJECT_SIT: $CI_PROJECT_DIR/Mock.API.Tests.SIT/     
+
+stages:       
+    - SITTest
+    - LIVETest    
+
+SIT:
+    stage: SITTest
+    script:
+        - "dotnet restore"
+        - "cd $TEST_PROJECT_SIT"
+        - "dotnet build -c Release"        
+        - "dotnet test -c Release"     
+
+LIVE:
+    stage: LIVETest
+    script:
+        - "dotnet restore"
+        - "cd $TEST_PROJECT_LIVE"
+        - "dotnet build -c Release"        
+        - "dotnet test -c Release"  
