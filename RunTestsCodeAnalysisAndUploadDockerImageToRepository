@@ -1,0 +1,119 @@
+image: microsoft/dotnet:latest
+
+variables:
+    VERSION_NUMBER: ${VERSION_MAJOR}.${VERSION_MINOR}.$CI_PIPELINE_IID
+    PROJECT_NAME: $CI_PROJECT_NAME
+    PROJECT_PATH: Test.WebApi
+    PACKAGE_VERSION: 1.0.${CI_JOB_ID}
+    PUBLISH_DIR: $CI_PROJECT_DIR/publish  
+
+
+stages:
+  - test
+  - build
+  - scan
+  - publish
+
+test:merge:
+  stage: test
+  only:
+    - merge_request
+  script:
+    - dotnet test /p:AltCover=true /p:AltCoverAssemblyExcludeFilter="xUnit|Tests" --filter "FullyQualifiedName~Unit"
+
+build:merge:
+  stage: build
+  only:
+    - merge_request
+  dependencies:
+    - test:master
+  script:
+    - dotnet build
+
+test:master:
+  stage: test
+  only:
+    - master
+  script:
+    - dotnet test /p:AltCover=true /p:AltCoverAssemblyExcludeFilter="xUnit|Tests" --filter "FullyQualifiedName~Unit"
+    - cd ${PROJECT_PATH}
+    - dotnet reportgenerator "-reports:../*.Tests/coverage.xml" "-targetdir:../coveragereport" -reporttypes:"HTML;Badges;SonarQube"
+  artifacts:
+    paths:
+      - coveragereport
+    expire_in: 30 mins
+
+build:master:
+  stage: build
+  only:
+    - master
+  dependencies:
+    - test:master
+  script:
+    - apt-get update
+    - apt-get install -y default-jre
+    - dotnet tool install --tool-path . dotnet-sonarscanner
+    - ./dotnet-sonarscanner begin /k:"${PROJECT_NAME}" /d:sonar.host.url="${SONAR_HOST_URL}" /d:sonar.coverageReportPaths="coveragereport/SonarQube.xml"
+    - dotnet publish -c Release -o ../out -p:Version=${VERSION_NUMBER}
+    - ./dotnet-sonarscanner end
+    - dotnet pack --no-build -c Release -o $CI_PROJECT_DIR/publish -p:PackageVersion=${VERSION_NUMBER}
+    - echo "PUBLISHING NUGET PACKAGE"
+    - dotnet nuget push ${PUBLISH_DIR}/Test.Service.${VERSION_NUMBER}.nupkg --source ${NEXUS_NUGET_PUSH_REPOSITORY} --api-key ${NEXUS_NUGET_PUSH_KEY}
+
+  artifacts:
+    paths:
+      - out
+      - publish
+      - coveragereport
+    expire_in: 30 mins
+
+scan:nexusiq:
+  stage: scan
+  only:
+    - master
+  image: sonatype/gitlab-nexus-iq-pipeline:1.2
+  dependencies:
+    - build:master
+  script:
+    - /sonatype/evaluate -i ${PROJECT_NAME} out/
+    - mkdir nexusiq
+    - mv ${PROJECT_NAME}-policy-eval-report.html nexusiq
+  artifacts:
+    paths:
+      - out
+      - nexusiq
+      - publish
+      - coveragereport
+    expire_in: 30 mins
+
+publish:artifacts:
+  stage: publish
+  only:
+    - master
+  dependencies:
+    - scan:nexusiq
+  script:
+    - mkdir ${PROJECT_NAME}
+    - mkdir ${PROJECT_NAME}/reports
+    - mkdir ${PROJECT_NAME}/artifacts
+    - mv coveragereport/ ${PROJECT_NAME}/reports/coveragereport
+    - mv nexusiq/ ${PROJECT_NAME}/reports/nexusiq
+    - mv out/ ${PROJECT_NAME}/artifacts
+  artifacts:
+    paths:
+      - ${PROJECT_NAME}
+
+publish:docker:
+  stage: publish
+  only:
+    - master
+  dependencies:
+    - scan:nexusiq
+  image: docker:18.06.3-ce
+  services:
+    - docker:18.06.3-ce-dind
+  script:
+    - docker info
+    - echo ${REPOSITORY_DOCKER_PASSWORD} | docker login --username ${REPOSITORY_DOCKER_USER} --password-stdin ${REPOSITORY_DOCKER_REGISTRY}
+    - docker build -t "${REPOSITORY_DOCKER_REGISTRY}/${PROJECT_NAME}:latest" -t "${REPOSITORY_DOCKER_REGISTRY}/${PROJECT_NAME}:${VERSION_NUMBER}" .
+    - docker push "${REPOSITORY_DOCKER_REGISTRY}/${PROJECT_NAME}:latest"
